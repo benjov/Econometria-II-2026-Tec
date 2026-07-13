@@ -1,0 +1,196 @@
+---
+title: "Clase 05. Procesos No Estacionarios I — Raíces Unitarias"
+subtitle: "Econometría II — Series de Tiempo | Tec de Monterrey | Sesión 6 (1 sep 2026)"
+author: "Benjamín Oliva (benjov@tec.mx)"
+date: "`r format(Sys.Date(), '%B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                       fig.width = 9, fig.height = 5)
+```
+
+## ¿Qué aprenderemos hoy?
+
+Esta sesión cubre los incisos (a), (b) y (c) del punto 4 del temario: definición y formas de no estacionariedad, eliminación de la tendencia, y las pruebas de raíz unitaria (Dickey-Fuller, ADF, Phillips-Perron y cambio estructural). Es la base directa de la **Práctica 2**.
+
+Al terminar esta clase deberás poder:
+
+1. Distinguir un proceso estacionario en tendencia (TS) de uno estacionario en diferencia (DS)
+2. Elegir el método correcto para eliminar la tendencia según el tipo de no estacionariedad
+3. Aplicar e interpretar las pruebas ADF, PP y KPSS, incluyendo la selección del número de rezagos
+4. Detectar un cambio estructural con la prueba de Chow y con `breakpoints()` de `strucchange`
+
+**Datos:** `Data_Practica_02.xlsx` — tasa de informalidad laboral y tasa de desocupación, INEGI (mensual, ene-2005 a jul-2025)
+
+```{r libraries}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(urca)
+library(strucchange)
+source("../utils/utils.R")
+```
+
+---
+
+## 1. Formas de no estacionariedad: TS vs. DS
+
+En la Clase 03 vimos que un proceso AR(1) es estacionario si $|a_1|<1$. ¿Qué pasa en el caso frontera $a_1=1$? Ya lo simulamos, de forma determinística, en la Clase 02: obtenemos una **tendencia lineal** (si además hay término constante) o una **caminata aleatoria** (si el término estocástico se acumula). Es crucial distinguir dos fuentes de no estacionariedad, porque **el tratamiento correcto es distinto en cada caso**:
+
+- **Estacionario en tendencia (TS, *trend-stationary*):** $X_t = \beta_0 + \beta_1 t + \varepsilon_t$, con $\varepsilon_t$ estacionario. La no estacionariedad es puramente determinística; se corrige **restando la tendencia estimada** (regresión sobre $t$).
+- **Estacionario en diferencia (DS, *difference-stationary*):** $X_t = X_{t-1} + \varepsilon_t$ (caminata aleatoria, con o sin deriva). La no estacionariedad es estocástica — cada choque tiene efecto **permanente**. Se corrige **diferenciando** la serie.
+
+```{r simulacion_ts_ds}
+set.seed(2026)
+Tt <- 200
+t_idx <- 1:Tt
+
+TS <- 5 + 0.3 * t_idx + rnorm(Tt, sd = 3)                 # trend-stationary
+DS <- cumsum(rnorm(Tt, mean = 0.3, sd = 3))                # difference-stationary (caminata con deriva)
+
+df_tsds <- data.frame(t = t_idx, TS = TS, DS = DS)
+
+ggplot(df_tsds, aes(x = t)) +
+  geom_line(aes(y = TS, color = "TS: tendencia + ruido estacionario")) +
+  geom_line(aes(y = DS, color = "DS: caminata aleatoria con deriva")) +
+  labs(title = "Dos formas de no estacionariedad que \"se ven\" parecidas",
+       x = "t", y = expression(X[t]), color = "") +
+  tema_series()
+```
+
+Visualmente ambas series **crecen**, pero su naturaleza es distinta: si a la TS le restamos su tendencia estimada queda estacionaria; si a la DS le restamos una tendencia lineal, **seguirá siendo no estacionaria** (el "paseo" persiste). En cambio, si diferenciamos la DS una vez, se vuelve estacionaria; si diferenciamos de más la TS, introducimos autocorrelación espuria (**sobrediferenciación**).
+
+```{r detrend_vs_diff}
+TS_detrend <- residuals(lm(TS ~ t_idx))
+DS_detrend <- residuals(lm(DS ~ t_idx))   # tratamiento incorrecto para DS
+DS_diff    <- diff(DS)                     # tratamiento correcto para DS
+
+par(mfrow = c(3, 1))
+plot(TS_detrend, type = "l", col = "darkgreen", main = "TS - tendencia estimada (correcto)")
+plot(DS_detrend, type = "l", col = "firebrick", main = "DS - tendencia estimada (incorrecto: sigue sin ser estacionaria)")
+plot(DS_diff,    type = "l", col = "darkblue",  main = "DS diferenciada una vez (correcto)")
+par(mfrow = c(1, 1))
+```
+
+Esta distinción es exactamente lo que las **pruebas de raíz unitaria** buscan formalizar: ¿la no estacionariedad de mi serie es determinística (TS) o estocástica (DS)?
+
+---
+
+## 2. Carga de datos
+
+```{r datos}
+Datos <- read_excel("../data/Data_Practica_02.xlsx", sheet = "Datos", col_names = TRUE)
+head(Datos)
+
+Informalidad <- ts(Datos$Informalidad, start = c(2005, 1), frequency = 12)
+TDesocupa    <- ts(Datos$TDesocupa,    start = c(2005, 1), frequency = 12)
+
+par(mfrow = c(2, 1))
+plot(Informalidad, col = "darkblue", main = "Tasa de informalidad laboral", ylab = "%")
+plot(TDesocupa,    col = "darkred",  main = "Tasa de desocupación",         ylab = "%")
+par(mfrow = c(1, 1))
+```
+
+`Informalidad` muestra una tendencia decreciente de largo plazo; `TDesocupa` muestra un pico muy marcado en 2020 (COVID-19) — buen candidato para la sección de cambio estructural.
+
+---
+
+## 3. Pruebas de Dickey-Fuller y ADF
+
+El Dickey-Fuller (DF) prueba $H_0: a_1 = 1$ (raíz unitaria) contra $H_1: |a_1|<1$, en la regresión auxiliar $\Delta X_t = \gamma X_{t-1} + \dots + \varepsilon_t$ (donde $\gamma = a_1 - 1$). El ADF añade rezagos de $\Delta X_t$ para blanquear los residuales. Se estima en **tres especificaciones** ("Modelos A, B y C" en la notación de la Práctica 2):
+
+- **Modelo C** (`type = "none"`): sin constante ni tendencia
+- **Modelo B** (`type = "drift"`): con constante
+- **Modelo A** (`type = "trend"`): con constante y tendencia
+
+El número de rezagos se puede fijar con la regla de Schwert:
+
+$$p = \left\lfloor 4 \left(\frac{T}{100}\right)^{1/4} \right\rfloor$$
+
+```{r regla_schwert}
+Tobs <- length(Informalidad)
+p_schwert <- floor(4 * (Tobs / 100)^(1/4))
+p_schwert
+```
+
+```{r adf_niveles}
+summary(ur.df(Informalidad, type = "trend", lags = p_schwert, selectlags = "AIC"))
+```
+
+```{r adf_diferencias}
+summary(ur.df(diff(Informalidad), type = "drift", lags = p_schwert, selectlags = "AIC"))
+```
+
+En niveles, con la especificación de tendencia (Modelo A), el estadístico $\tau_3 \approx -3.69$ **sí supera** (en valor absoluto) al valor crítico al 5% ($-3.43$) ⇒ se rechaza $H_0$. Antes de concluir "no hay raíz unitaria", compáralo con las especificaciones B y C de la sección 4 (sin tendencia): ahí el resultado cambia. Esto **no es un error** — es la lección central de esta sección: la conclusión de un ADF depende de si el término determinístico (tendencia, constante) incluido en la prueba coincide con el que realmente genera los datos. En diferencias, la raíz unitaria se rechaza con claridad en cualquier especificación ($\tau_2 \approx -11.2$ vs. cv $-2.88$).
+
+## 4. Phillips-Perron y KPSS
+
+PP es una corrección no paramétrica del DF, robusta a heterocedasticidad y autocorrelación en los residuales (no necesita elegir rezagos "a mano"). KPSS **invierte la hipótesis nula**: $H_0$ = estacionariedad, $H_1$ = raíz unitaria — es un buen complemento del ADF/PP porque un resultado consistente entre ambas familias de pruebas da más confianza.
+
+Usamos la función `unit_root_summary()` (definida en `utils/utils.R`) para correr las siete pruebas de un jalón:
+
+```{r unit_root_summary_niveles}
+unit_root_summary(Informalidad, "Informalidad (niveles)")
+```
+
+```{r unit_root_summary_diferencias}
+unit_root_summary(diff(Informalidad), "Informalidad (primera diferencia)")
+```
+
+**Regla de decisión conjunta:** buscamos que ADF/PP no rechacen raíz unitaria **y** que KPSS sí rechace estacionariedad, en niveles; y lo contrario en diferencias. Para `Informalidad` en niveles el panorama es mixto: el ADF/PP con constante (Modelo B, sin tendencia) **no** rechazan raíz unitaria, y el KPSS (nivel y tendencia) **sí** rechaza estacionariedad — evidencia consistente con no estacionariedad. Pero el ADF/PP **con tendencia** (Modelo A) sí rechazan raíz unitaria. Esta discrepancia es real y frecuente en series económicas con tendencias suaves: no hay un veredicto mecánico único, y por eso conviene reportar varias especificaciones y justificar cuál es la económicamente razonable (¿tiene sentido asumir una tendencia determinística en la tasa de informalidad?). En diferencias, en cambio, **las siete pruebas coinciden**: se rechaza raíz unitaria (ADF/PP) y no se rechaza estacionariedad (KPSS) ⇒ `Informalidad` es, con buena evidencia, integrada de orden 1, $I(1)$.
+
+---
+
+## 5. Cambio estructural
+
+Un choque grande y persistente (como el COVID-19 en `TDesocupa`) puede hacer que una prueba ADF **no rechace** raíz unitaria aun cuando la serie sea estacionaria alrededor de una tendencia **con un quiebre** — el ADF tiende a confundir un cambio estructural con una raíz unitaria (Perron, 1989).
+
+### Prueba de Chow (quiebre conocido)
+
+Si tenemos una fecha candidata (marzo de 2020), podemos probar si los parámetros de una regresión (aquí, sobre una tendencia) cambian antes/después de ese punto:
+
+```{r chow_test}
+punto_quiebre <- which(time(TDesocupa) == 2020 + 2/12)  # marzo 2020
+
+sctest(TDesocupa ~ time(TDesocupa), type = "Chow", point = punto_quiebre)
+```
+
+Un valor-p pequeño rechaza $H_0$ (parámetros estables) ⇒ hay evidencia de cambio estructural en ese punto.
+
+### Detección automática de quiebres
+
+Si no queremos fijar la fecha a priori, `breakpoints()` la estima:
+
+```{r breakpoints}
+bp <- breakpoints(TDesocupa ~ time(TDesocupa))
+summary(bp)
+
+plot(TDesocupa, main = "Tasa de desocupación y quiebre(s) estructural(es) estimado(s)")
+lines(bp)
+```
+
+```{r fechas_quiebre}
+time(TDesocupa)[bp$breakpoints]
+```
+
+¿Coincide la fecha estimada con el inicio de la pandemia? Este tipo de evidencia es justo lo que motiva usar pruebas de raíz unitaria robustas a cambio estructural (p. ej. Zivot-Andrews, `urca::ur.za()`) en series con choques grandes, en vez de descartar automáticamente la estacionariedad sólo porque el ADF "estándar" no rechaza.
+
+---
+
+## Ejercicios
+
+1. Repite la sección 3 (ADF en niveles y diferencias) para `TDesocupa`. ¿Es $I(1)$ igual que `Informalidad`?
+2. Repite `unit_root_summary()` para `TDesocupa_H` y `TDesocupa_M` (desocupación de hombres y mujeres). ¿Las conclusiones son iguales para ambos sexos?
+3. Usa `urca::ur.za(TDesocupa, model = "both", lag = p_schwert)` (prueba de Zivot-Andrews, que permite un quiebre estructural bajo la alternativa). ¿Cambia la conclusión sobre raíz unitaria respecto al ADF estándar de la sección 3?
+4. Con el `breakpoints()` de la sección 5 aplicado a `Informalidad` en lugar de `TDesocupa`, ¿se detecta algún quiebre? ¿Tiene sentido económico la fecha encontrada?
+
+Estos ejercicios son, de hecho, muy cercanos a lo que se pide en la **Práctica 2** — resuélvelos como preparación.

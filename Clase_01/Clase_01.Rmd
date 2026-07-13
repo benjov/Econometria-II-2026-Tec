@@ -1,0 +1,168 @@
+---
+title: "Clase 01. Introducción al Análisis de Series de Tiempo"
+subtitle: "Econometría II — Series de Tiempo | Tec de Monterrey | Sesión 2 (12 ago 2026)"
+author: "Benjamín Oliva (benjov@tec.mx)"
+date: "`r format(Sys.Date(), '%B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                       fig.width = 9, fig.height = 5)
+```
+
+## ¿Qué aprenderemos hoy?
+
+Esta sesión cubre el punto 1 del temario: **la naturaleza de los datos de series de tiempo** y **ejemplos y aplicaciones**.
+
+Al terminar esta clase deberás poder:
+
+1. Explicar qué distingue a una serie de tiempo de otros tipos de datos (corte transversal, panel)
+2. Identificar los componentes no observados de una serie: tendencia, ciclo, estacionalidad e irregular
+3. Declarar formalmente un objeto `ts` en R, especificando frecuencia e inicio
+4. Reconocer, de forma visual, los primeros indicios de (no) estacionariedad que formalizaremos en clases futuras
+
+**Datos:** `Base_Transporte.xlsx` — pasajeros y vuelos, nacionales e internacionales, y pasajeros del STC Metro (mensual, ene-2000 a jun-2025). Fuente: INEGI.
+
+```{r libraries}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+source("../utils/utils.R")
+```
+
+---
+
+## 1. ¿Qué es una serie de tiempo?
+
+Una serie de tiempo es una secuencia de observaciones $\{X_t\}_{t=1}^{T}$ de una variable aleatoria, **ordenadas en el tiempo** y típicamente espaciadas de manera regular (diaria, mensual, trimestral, anual...).
+
+Lo que hace especial a este tipo de datos, frente a un corte transversal, es que **el orden importa**: $X_t$ suele estar correlacionada con $X_{t-1}, X_{t-2}, \dots$. Esta dependencia temporal es, a la vez, el principal reto (viola el supuesto de observaciones independientes de MCO clásico) y la principal fuente de información útil para pronosticar.
+
+Formalmente, pensamos en una serie de tiempo observada como **una realización particular** de un proceso estocástico: una familia de variables aleatorias $\{X_t\}$ indexada por el tiempo. Nunca observamos el proceso completo, sólo una trayectoria (una "corrida") de él — esta idea será central cuando hablemos de estacionariedad (Clase 03) y de simulación (Clase 02).
+
+### Componentes no observados de una serie
+
+Es común descomponer (conceptualmente) una serie en cuatro componentes:
+
+- **Tendencia ($T_t$):** movimiento de largo plazo, creciente o decreciente
+- **Ciclo ($C_t$):** oscilaciones de mediano plazo no necesariamente periódicas (ej. ciclo económico)
+- **Estacionalidad ($S_t$):** patrón que se repite con frecuencia fija (ej. cada diciembre)
+- **Irregular ($\varepsilon_t$):** lo que queda después de remover T, C y S — idealmente ruido
+
+$$X_t = T_t + C_t + S_t + \varepsilon_t \quad \text{(esquema aditivo)}$$
+$$X_t = T_t \times C_t \times S_t \times \varepsilon_t \quad \text{(esquema multiplicativo)}$$
+
+Retomaremos esta descomposición formalmente en la Clase 06 (filtros). Hoy nos interesa **verla** en los datos.
+
+## 2. Ejemplos y aplicaciones
+
+Las series de tiempo son la materia prima de buena parte de la macroeconomía aplicada, las finanzas y los negocios:
+
+- **Macroeconomía:** PIB, IGAE, inflación, tasas de interés — para diagnóstico de coyuntura y política monetaria/fiscal
+- **Finanzas:** precios de activos, tipo de cambio, volatilidad — para valuación y gestión de riesgo (Clases 07-08)
+- **Sector transporte/turismo** (nuestro caso de hoy): pasajeros y vuelos — sensibles a choques (crisis, pandemias) y con fuerte estacionalidad
+- **Mercado laboral:** tasas de desocupación e informalidad (la base que usaremos en la Clase 05)
+
+En todos los casos, el objetivo es el mismo: **entender la dependencia temporal para describir, explicar o pronosticar**.
+
+---
+
+## 3. Carga de datos y declaración de series de tiempo
+
+```{r load_data}
+Datos <- read_excel("../data/Base_Transporte.xlsx", sheet = "Datos", col_names = TRUE)
+str(Datos)
+head(Datos)
+```
+
+Las columnas son:
+
+| Variable | Descripción |
+|---|---|
+| `Pax_Nal` | Pasajeros (salidas) en vuelos nacionales |
+| `Pax_Int` | Pasajeros (salidas) en vuelos internacionales |
+| `Vue_Nal` | Vuelos u operaciones (salidas) nacionales |
+| `Vue_Int` | Vuelos u operaciones (salidas) internacionales |
+| `Pax_Metro` | Pasajeros transportados (millones) en el STC Metro |
+
+R tiene una clase de objeto dedicada a series de tiempo: `ts`. Declararla explícitamente (con su frecuencia e inicio) nos da acceso a métodos especializados (`plot.ts`, `diff`, `decompose`, `window`, etc.).
+
+```{r declare_ts}
+Pax_Nal   <- ts(Datos$Pax_Nal,   start = c(2000, 1), frequency = 12)
+Pax_Int   <- ts(Datos$Pax_Int,   start = c(2000, 1), frequency = 12)
+Vue_Nal   <- ts(Datos$Vue_Nal,   start = c(2000, 1), frequency = 12)
+Vue_Int   <- ts(Datos$Vue_Int,   start = c(2000, 1), frequency = 12)
+Pax_Metro <- ts(Datos$Pax_Metro, start = c(2000, 1), frequency = 12)
+
+class(Pax_Nal)
+start(Pax_Nal); end(Pax_Nal); frequency(Pax_Nal)
+```
+
+---
+
+## 4. Primeras gráficas: niveles
+
+```{r plot_niveles}
+plot(Pax_Nal, type = "l", lwd = 1, col = "red",
+     ylab = "Pasajeros", xlab = "Tiempo", main = "Pasajeros en vuelos nacionales")
+```
+
+¿Qué observas? Una caída abrupta y muy pronunciada alrededor de 2020 (pandemia), y un patrón que se repite dentro de cada año (estacionalidad). Comparemos vuelos nacionales e internacionales en la misma escala, reindexando ambas series a 100 en enero de 2000:
+
+```{r plot_indice}
+Pax_Nal_I <- 100 * Pax_Nal / Pax_Nal[1]
+Pax_Int_I <- 100 * Pax_Int / Pax_Int[1]
+
+plot(Pax_Nal_I, type = "l", lwd = 1, col = "red",
+     ylab = "Índice (ene-2000 = 100)", xlab = "Tiempo", ylim = c(0, 450),
+     main = "Pasajeros nacionales vs. internacionales (índice)")
+par(new = TRUE)
+plot(Pax_Int_I, type = "l", lwd = 1, col = "blue",
+     ylab = "Índice (ene-2000 = 100)", xlab = "Tiempo", ylim = c(0, 450))
+legend("topleft", c("Nacional", "Internacional"), cex = 0.8, lty = 1, col = c("red", "blue"))
+par(new = FALSE)
+```
+
+## 5. Estacionalidad: una mirada visual
+
+Una forma simple de ver el patrón estacional es graficar cada año como una línea sobre el mismo eje de "mes":
+
+```{r plot_estacional}
+monthplot(Pax_Nal, ylab = "Pasajeros", main = "Patrón estacional — Pasajeros nacionales")
+```
+
+Cada segmento horizontal es el promedio del mes correspondiente; la dispersión alrededor de él es lo que varía año con año.
+
+## 6. Logaritmos y diferencias (repaso y extensión)
+
+Como vimos en la sesión de Intro a R, dos transformaciones centrales del curso son el logaritmo y la diferencia:
+
+```{r transformaciones}
+ln_Pax_Nal  <- log(Pax_Nal)
+dln_Pax_Nal <- diff(ln_Pax_Nal, lag = 1)
+
+par(mfrow = c(3, 1))
+plot(Pax_Nal,     main = "Pax_Nal — Niveles",        ylab = "Pasajeros", col = "steelblue")
+plot(ln_Pax_Nal,  main = "Pax_Nal — Logaritmo",       ylab = "ln(Pasajeros)", col = "darkgreen")
+plot(dln_Pax_Nal, main = "Pax_Nal — Diferencia log.", ylab = "Var. % aprox.", col = "firebrick")
+par(mfrow = c(1, 1))
+```
+
+La diferencia logarítmica $\Delta \ln X_t = \ln X_t - \ln X_{t-1}$ aproxima la tasa de variación porcentual mensual. Nota cómo, a simple vista, la serie en diferencias **luce más "estable"** alrededor de una media constante que la serie en niveles — esta es justo la intuición informal de estacionariedad que formalizaremos la próxima clase.
+
+---
+
+## Ejercicios
+
+1. Repite la declaración `ts()`, la gráfica de niveles y la transformación a logaritmos y diferencias para `Pax_Metro`. ¿Se aprecia el mismo choque de 2020?
+2. Usa `window(Pax_Nal, start = c(2018, 1), end = c(2021, 12))` para hacer zoom sobre la ventana 2018-2021. Describe lo que observas.
+3. Calcula la variación porcentual anual (`diff(ln_Pax_Nal, lag = 12)`) en vez de la mensual. ¿Qué interpretación tiene cada una?
+4. En una frase, ¿cuál de los cuatro componentes (tendencia, ciclo, estacionalidad, irregular) domina la caída de 2020? Justifica tu respuesta.

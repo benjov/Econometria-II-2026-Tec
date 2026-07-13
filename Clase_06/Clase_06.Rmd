@@ -1,0 +1,157 @@
+---
+title: "Clase 06. Descomposición de Series de Tiempo (Filtros)"
+subtitle: "Econometría II — Series de Tiempo | Tec de Monterrey | Sesión 7 (2 sep 2026)"
+author: "Benjamín Oliva (benjov@tec.mx)"
+date: "`r format(Sys.Date(), '%B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                       fig.width = 9, fig.height = 5)
+```
+
+## ¿Qué aprenderemos hoy?
+
+Cerramos el punto 4 del temario con el inciso (d): descomposición de series de tiempo mediante filtros. Retomamos los cuatro componentes no observados que presentamos en la Clase 01 (tendencia, ciclo, estacionalidad, irregular) y aprendemos a **extraerlos** de una serie real.
+
+Al terminar esta clase deberás poder:
+
+1. Aplicar la descomposición clásica (`decompose()`) y la descomposición STL (`stl()`) a una serie mensual
+2. Construir una serie desestacionalizada y explicar cuándo conviene usarla en vez de la serie original
+3. Aplicar el filtro Hodrick-Prescott para separar tendencia y ciclo, y calcular una "brecha" respecto a la tendencia
+
+**Datos:** `Base_Transporte.xlsx` (continuamos con `Pax_Nal`, con fuerte estacionalidad y un choque atípico en 2020)
+
+```{r libraries}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(mFilter)
+source("../utils/utils.R")
+```
+
+---
+
+## 1. Descomposición clásica
+
+Recordemos el esquema aditivo que presentamos en la Clase 01: $X_t = T_t + C_t + S_t + \varepsilon_t$ (o multiplicativo si la amplitud de la estacionalidad crece con el nivel de la serie). `decompose()` estima estos componentes con medias móviles:
+
+```{r datos}
+Datos <- read_excel("../data/Base_Transporte.xlsx", sheet = "Datos", col_names = TRUE)
+Pax_Nal <- ts(Datos$Pax_Nal, start = c(2000, 1), frequency = 12)
+
+plot(Pax_Nal, col = "darkblue", main = "Pasajeros en vuelos nacionales", ylab = "Pasajeros")
+```
+
+Dado que la amplitud estacional parece crecer con el nivel de la serie (más marcada en los años con más tráfico), probamos el esquema **multiplicativo**:
+
+```{r decompose}
+desc_Pax_Nal <- decompose(Pax_Nal, type = "multiplicative")
+plot(desc_Pax_Nal)
+```
+
+```{r decompose_componentes}
+head(desc_Pax_Nal$trend, 15)
+head(desc_Pax_Nal$seasonal, 15)
+head(desc_Pax_Nal$random, 15)
+```
+
+`decompose()` es simple e intuitivo, pero tiene una limitación importante: usa una media móvil centrada de 12 meses para la tendencia, lo que **pierde los primeros y últimos 6 meses** de la muestra (quedan como `NA`) y no reacciona a cambios recientes en el patrón estacional.
+
+## 2. Descomposición STL
+
+`stl()` (*Seasonal-Trend decomposition using Loess*) es una alternativa más flexible: usa regresión local (loess) en vez de medias móviles fijas, permite que el patrón estacional **cambie lentamente en el tiempo**, y no pierde observaciones en los extremos.
+
+```{r stl}
+stl_Pax_Nal <- stl(log(Pax_Nal), s.window = "periodic", robust = TRUE)
+plot(stl_Pax_Nal, main = "Descomposición STL — log(Pax_Nal)")
+```
+
+El argumento `robust = TRUE` reduce la influencia de observaciones atípicas (como el choque de 2020) sobre la tendencia y la estacionalidad estimadas — importante cuando la serie tiene eventos extremos.
+
+## 3. Series desestacionalizadas
+
+La serie **desestacionalizada** (o "ajustada por estacionalidad") es la serie original menos (o dividida entre, en el esquema multiplicativo) su componente estacional: $X_t^{SA} = T_t + C_t + \varepsilon_t$. Es la que reportan las oficinas de estadística (INEGI, Banxico) cuando publican cifras "ajustadas por estacionalidad" — permite comparar un mes contra el inmediato anterior sin que el patrón estacional distorsione la lectura.
+
+```{r desestacionalizada}
+# Serie desestacionalizada = original - componente estacional (esquema aditivo, en logaritmos)
+Pax_Nal_SA <- log(Pax_Nal) - stl_Pax_Nal$time.series[, "seasonal"]
+
+comparacion <- data.frame(
+  Periodo = Datos$Periodo,
+  Original = as.numeric(log(Pax_Nal)),
+  Desestacionalizada = as.numeric(Pax_Nal_SA)
+)
+
+ggplot(comparacion, aes(x = Periodo)) +
+  geom_line(aes(y = Original, color = "Original (log)")) +
+  geom_line(aes(y = Desestacionalizada, color = "Desestacionalizada")) +
+  labs(title = "Pax_Nal: original vs. desestacionalizada", x = "Tiempo", y = "log(Pasajeros)", color = "") +
+  tema_series()
+```
+
+Nota cómo la serie desestacionalizada conserva la tendencia y el choque de 2020, pero suaviza el "diente de sierra" estacional — así se aprecia con más claridad la dinámica de mediano plazo.
+
+> **Nota profesional:** el estándar que usan INEGI, Banxico y el Census Bureau de EE.UU. es el método **X-13ARIMA-SEATS**, disponible en R vía el paquete `seasonal` (función `seas()`). Es más sofisticado que `decompose()`/`stl()` (maneja días hábiles, efectos de calendario, outliers automáticos) pero requiere instalar el binario `x13binary`. Si tu instalación lo soporta, puedes explorarlo con `seasonal::seas(Pax_Nal)`; para los fines de este curso, `stl()` es suficiente y más portable.
+
+---
+
+## 4. Filtro Hodrick-Prescott
+
+El filtro HP (Hodrick y Prescott, 1997) separa una serie en **tendencia** $T_t$ y **ciclo** $C_t$ ($X_t = T_t + C_t$), eligiendo $T_t$ como la solución de:
+
+$$\min_{T_t} \; \sum_{t=1}^{T} (X_t - T_t)^2 + \lambda \sum_{t=2}^{T-1} \big[(T_{t+1}-T_t) - (T_t - T_{t-1})\big]^2$$
+
+El primer término penaliza que la tendencia se aleje de los datos; el segundo penaliza que la tendencia **cambie de pendiente** bruscamente. El parámetro $\lambda$ controla ese balance — a mayor $\lambda$, la tendencia es más suave (en el límite, una recta). Hodrick y Prescott sugieren:
+
+- $\lambda = 100$ para datos anuales
+- $\lambda = 1600$ para datos trimestrales
+- $\lambda = 14400$ para datos mensuales
+
+```{r hp_filter}
+hp_Pax_Nal <- hpfilter(log(Pax_Nal), freq = 14400)
+plot(hp_Pax_Nal)  # nota: mFilter::plot.mFilter no admite un main= personalizado
+```
+
+```{r hp_componentes}
+Tendencia_HP <- hp_Pax_Nal$trend
+Ciclo_HP     <- hp_Pax_Nal$cycle
+
+plot(Ciclo_HP, col = "darkred", main = "Componente cíclico — log(Pax_Nal)",
+     ylab = "Desviación de la tendencia HP")
+abline(h = 0, lty = "dashed", col = "grey40")
+```
+
+### La "brecha" respecto a la tendencia
+
+En macroeconomía, el componente cíclico del HP aplicado al PIB (o, en este caso, a los pasajeros transportados) se interpreta como una medida de la **brecha** entre el nivel observado y su tendencia de largo plazo: valores negativos indican actividad por debajo de tendencia, valores positivos por encima.
+
+```{r brecha}
+brecha <- data.frame(Periodo = Datos$Periodo, Brecha_pct = 100 * as.numeric(Ciclo_HP))
+
+ggplot(brecha, aes(x = Periodo, y = Brecha_pct)) +
+  geom_line(color = "darkred") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+  labs(title = "Brecha respecto a la tendencia HP — Pax_Nal",
+       x = "Tiempo", y = "Brecha (%, aprox.)") +
+  tema_series()
+```
+
+La caída de 2020 se ve, en este esquema, como una brecha negativa extrema — pero nota que el filtro HP **arrastra** la tendencia hacia el choque grande (problema conocido del HP: es sensible a valores atípicos, sobre todo cerca de los extremos de la muestra). Vale la pena compararlo con la tendencia STL de la sección 2, que con `robust = TRUE` es menos sensible a este tipo de eventos.
+
+---
+
+## Ejercicios
+
+1. Aplica `decompose()` con esquema **aditivo** (en vez de multiplicativo) a `Pax_Nal`. Compara visualmente el componente irregular (`$random`) contra el del esquema multiplicativo — ¿cuál luce más parecido a ruido blanco?
+2. Repite la descomposición STL para `Pax_Metro`. ¿El patrón estacional es igual de marcado que en `Pax_Nal`?
+3. Aplica el filtro HP a `Pax_Metro` con `freq = 14400`. Genera la serie de "brecha" y señala en qué meses fue más negativa.
+4. Vuelve a correr el filtro HP sobre `log(Pax_Nal)` pero excluyendo las observaciones de 2020-2021 (usa `window()` para recortar la muestra). ¿Cambia mucho la tendencia estimada para el resto del periodo? ¿Qué te dice esto sobre la sensibilidad del HP a valores atípicos?

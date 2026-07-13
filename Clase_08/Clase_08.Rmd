@@ -1,0 +1,176 @@
+---
+title: "Clase 08. Modelos Univariados de Volatilidad II — GARCH y otros modelos"
+subtitle: "Econometría II — Series de Tiempo | Tec de Monterrey | Sesión 9 (9 sep 2026)"
+author: "Benjamín Oliva (benjov@tec.mx)"
+date: "`r format(Sys.Date(), '%B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                       fig.width = 9, fig.height = 5)
+```
+
+## ¿Qué aprenderemos hoy?
+
+Cerramos el temario del curso con el inciso (a) restante y el (b) del punto 5: el modelo GARCH, y una mirada breve a otros modelos de volatilidad (EGARCH). Es la última sesión antes de la entrega del trabajo final (fin de semana del 12-13 de septiembre).
+
+Al terminar esta clase deberás poder:
+
+1. Explicar por qué GARCH(p,q) es una generalización más parsimoniosa que un ARCH(q) de orden alto
+2. Estimar un GARCH(1,1) y calcular la persistencia de la volatilidad ($\alpha+\beta$)
+3. Generar un pronóstico de la volatilidad condicional fuera de muestra
+4. Reconocer, conceptualmente, el problema de asimetría (efecto apalancamiento) que motiva modelos como el EGARCH
+
+**Datos:** `Data_Practica_02.xlsx` — continuamos con `TDesocupa` (Clases 05 y 07)
+
+```{r libraries}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(rugarch)
+source("../utils/utils.R")
+```
+
+```{r datos}
+Datos <- read_excel("../data/Data_Practica_02.xlsx", sheet = "Datos", col_names = TRUE)
+TDesocupa <- ts(Datos$TDesocupa, start = c(2005, 1), frequency = 12)
+dTD <- diff(TDesocupa)
+Fechas <- as.Date(paste0(Datos$Periodos, "/01"), format = "%Y/%m/%d")[-1]
+```
+
+---
+
+## 1. De ARCH a GARCH: por qué generalizar
+
+En la Clase 07 vimos que un ARCH(1) ya captura buena parte de la dinámica de la varianza en `dTD`. El problema práctico del ARCH(q) es que, si la volatilidad tiene "memoria larga" (los choques de hace varios meses siguen influyendo), necesitamos **muchos** rezagos $q$ para capturarla — igual que un proceso AR de orden alto es una forma poco parsimoniosa de aproximar lo que un ARMA captura con pocos parámetros (Clase 04).
+
+Bollerslev (1986) propone exactamente esa generalización: agregar rezagos de la **propia varianza condicional** al modelo.
+
+$$\sigma_t^2 = \omega + \sum_{i=1}^{q} \alpha_i U_{t-i}^2 + \sum_{j=1}^{p} \beta_j \sigma_{t-j}^2$$
+
+Un $GARCH(1,1)$ —con un solo rezago de cada tipo— suele ser suficiente para representar dinámicas de volatilidad que un ARCH necesitaría con $q$ grande, del mismo modo en que un ARMA(1,1) puede replicar lo que un AR de orden alto aproxima con muchos parámetros.
+
+## 2. Estimación de un GARCH(1,1)
+
+```{r garch11}
+spec_garch11 <- ugarchspec(
+  variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+  mean.model     = list(armaOrder = c(0, 0), include.mean = TRUE)
+)
+
+fit_garch11 <- ugarchfit(spec_garch11, dTD)
+fit_garch11
+```
+
+### Comparación contra el ARCH(1) de la Clase 07
+
+```{r comparacion_aic}
+spec_arch1 <- ugarchspec(
+  variance.model = list(model = "sGARCH", garchOrder = c(1, 0)),
+  mean.model     = list(armaOrder = c(0, 0), include.mean = TRUE)
+)
+fit_arch1 <- ugarchfit(spec_arch1, dTD)
+
+data.frame(
+  modelo = c("ARCH(1)", "GARCH(1,1)"),
+  AIC = c(infocriteria(fit_arch1)[1], infocriteria(fit_garch11)[1]),
+  BIC = c(infocriteria(fit_arch1)[2], infocriteria(fit_garch11)[2])
+)
+```
+
+En este caso los dos modelos quedan prácticamente empatados en AIC/BIC — una señal de que, para esta serie mensual, un solo rezago de $U_{t-1}^2$ ya explica casi toda la dinámica de corto plazo, y el término $\beta_1$ del GARCH aporta relativamente poco adicional. Esto **no siempre es así**: en series financieras de alta frecuencia (rendimientos diarios), el GARCH(1,1) casi siempre domina claramente al ARCH de cualquier orden razonable.
+
+## 3. Persistencia de la volatilidad
+
+La suma $\alpha_1 + \beta_1$ mide qué tan persistentes son los choques de volatilidad: entre más cerca de 1, más tarda la varianza condicional en regresar a su nivel de largo plazo tras un choque.
+
+```{r persistencia}
+alpha1 <- unname(coef(fit_garch11)["alpha1"])
+beta1  <- unname(coef(fit_garch11)["beta1"])
+omega  <- unname(coef(fit_garch11)["omega"])
+
+persistencia <- alpha1 + beta1
+var_incondicional <- omega / (1 - persistencia)
+
+c(alpha1 = alpha1, beta1 = beta1, persistencia = persistencia,
+  varianza_incondicional = var_incondicional)
+```
+
+Con persistencia $\alpha_1+\beta_1 \approx 0.9$, un choque de volatilidad tarda varios meses en disiparse a la mitad de su efecto inicial — la llamada **vida media** de un choque se calcula como $\ln(0.5)/\ln(\alpha_1+\beta_1)$:
+
+```{r vida_media}
+vida_media <- log(0.5) / log(persistencia)
+vida_media
+```
+
+### Volatilidad condicional: ARCH(1) vs. GARCH(1,1)
+
+```{r comparacion_sigma}
+data.frame(Fecha = Fechas, ARCH1 = as.numeric(sigma(fit_arch1)), GARCH11 = as.numeric(sigma(fit_garch11))) %>%
+  ggplot(aes(x = Fecha)) +
+  geom_line(aes(y = ARCH1,   color = "ARCH(1)")) +
+  geom_line(aes(y = GARCH11, color = "GARCH(1,1)")) +
+  labs(title = "Volatilidad condicional estimada", x = "Tiempo", y = expression(sigma[t]), color = "") +
+  tema_series()
+```
+
+---
+
+## 4. Pronóstico de volatilidad
+
+A diferencia del pronóstico de la media (Clase 04), donde el intervalo de confianza tenía ancho fijo alrededor de una trayectoria, aquí pronosticamos **directamente la varianza futura** — que puede ser el objeto de interés en sí mismo (p. ej. para medir riesgo).
+
+```{r forecast_garch}
+pronostico_vol <- ugarchforecast(fit_garch11, n.ahead = 12)
+
+data.frame(h = 1:12, sigma_pronosticado = as.numeric(sigma(pronostico_vol))) %>%
+  ggplot(aes(x = h, y = sigma_pronosticado)) +
+  geom_line(color = "darkblue") + geom_point(color = "darkblue") +
+  geom_hline(yintercept = sqrt(var_incondicional), linetype = "dashed", color = "grey40") +
+  labs(title = "Pronóstico de la volatilidad condicional a 12 meses",
+       subtitle = "La línea punteada es la desviación estándar incondicional (de largo plazo)",
+       x = "Horizonte (meses)", y = expression(hat(sigma)[T+h])) +
+  tema_series()
+```
+
+Como la persistencia es menor a 1, el pronóstico de $\sigma_t$ converge gradualmente hacia la desviación estándar incondicional de largo plazo — exactamente el mismo tipo de "reversión a la media" que vimos para procesos AR estacionarios en la Clase 03, pero aplicado a la varianza en vez de al nivel.
+
+---
+
+## 5. Otros modelos de volatilidad: el problema de la asimetría
+
+El GARCH estándar responde igual ante choques positivos y negativos, porque $U_{t-1}^2$ no distingue el signo. En muchas series financieras (y, como veremos, también aquí) las caídas y los aumentos **no** afectan la volatilidad futura por igual — el llamado **efecto apalancamiento** (*leverage effect*). El **EGARCH** (Nelson, 1991) lo captura modelando $\ln(\sigma_t^2)$ con un término adicional que depende del signo del choque:
+
+```{r egarch}
+spec_egarch11 <- ugarchspec(
+  variance.model = list(model = "eGARCH", garchOrder = c(1, 1)),
+  mean.model     = list(armaOrder = c(0, 0), include.mean = TRUE)
+)
+fit_egarch11 <- ugarchfit(spec_egarch11, dTD)
+fit_egarch11@fit$matcoef
+```
+
+El coeficiente `gamma1` mide la asimetría: si es estadísticamente distinto de cero, un choque positivo (aumento en la tasa de desocupación) y uno negativo de la misma magnitud **no** tienen el mismo efecto sobre la volatilidad futura. Con nuestros datos, `gamma1` resulta significativo — un indicio de que los **aumentos** en la desocupación desestabilizan más la serie que las caídas de magnitud similar, un patrón económicamente razonable (el deterioro del mercado laboral suele ser más abrupto que su recuperación).
+
+Otras extensiones que existen en la literatura, sólo para que las tengas en el radar (no las desarrollamos a detalle en este curso):
+
+- **GARCH-M** (*GARCH-in-mean*): la varianza condicional entra directamente en la ecuación de la media — útil cuando el riesgo mismo afecta el nivel esperado de la variable (p. ej. una prima de riesgo)
+- **TGARCH/GJR-GARCH**: como el EGARCH, captura asimetría, pero con una especificación distinta (umbral) en vez de una transformación logarítmica
+- **Modelos multivariados de volatilidad** (M-ARCH, M-GARCH): modelan la varianza-covarianza conjunta de varias series — quedan fuera del alcance de este curso de 5 semanas, pero son la extensión natural si más adelante trabajas con carteras de activos
+
+---
+
+## Ejercicios
+
+1. Estima un GARCH(1,1) sobre `diff(Informalidad)`. Calcula su persistencia ($\alpha_1+\beta_1$) y compárala con la de `TDesocupa`. ¿Cuál serie tiene "memoria" de volatilidad más larga?
+2. Con el modelo EGARCH de la sección 5, genera el pronóstico de volatilidad a 12 meses (`ugarchforecast`) y compáralo gráficamente contra el del GARCH(1,1) simétrico de la sección 4.
+3. Investiga (o revisa la ayuda de `?ugarchspec`) cómo se activa un modelo GARCH-in-mean en `rugarch` (pista: argumento `archm` en `mean.model`). No es necesario estimarlo — descríbelo en una frase.
+4. Con lo que aprendiste en las Clases 07 y 08: si tuvieras que explicarle a alguien sin formación técnica por qué "un choque grande en la economía sigue sintiéndose varios meses después, aunque el nivel de la serie ya se haya estabilizado", ¿qué le dirías, usando el concepto de persistencia de la volatilidad?

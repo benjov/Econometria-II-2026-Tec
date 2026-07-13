@@ -1,0 +1,172 @@
+---
+title: "Clase 04. Procesos Estacionarios Univariados II — ARMA, ARIMA y Pronóstico"
+subtitle: "Econometría II — Series de Tiempo | Tec de Monterrey | Sesión 5 (25 ago 2026)"
+author: "Benjamín Oliva (benjov@tec.mx)"
+date: "`r format(Sys.Date(), '%B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                       fig.width = 9, fig.height = 5)
+```
+
+## ¿Qué aprenderemos hoy?
+
+Cerramos el punto 3 del temario: procesos $ARMA(p,q)$ y $ARIMA(p,d,q)$, y el enfoque clásico de pronóstico (Box-Jenkins). Esta es la última sesión antes del examen parcial (miércoles 26 de agosto), que cubre los temas 1 a 3.
+
+Al terminar esta clase deberás poder:
+
+1. Escribir la representación de un proceso $ARMA(p,q)$ y de un $ARIMA(p,d,q)$
+2. Aplicar la metodología de Box-Jenkins: identificación → estimación → diagnóstico → pronóstico
+3. Comparar modelos candidatos con criterios de información (AIC/BIC)
+4. Generar un pronóstico fuera de muestra con intervalos de confianza y regresarlo a la escala original de la serie
+
+**Datos:** `Base_Transporte.xlsx` (continuamos con `Pax_Metro`, usada en la Clase 03)
+
+```{r libraries}
+library(ggplot2)
+library(dplyr)
+library(readxl)
+library(forecast)
+source("../utils/utils.R")
+```
+
+---
+
+## 1. De AR y MA a ARMA e ARIMA
+
+Un proceso $ARMA(p,q)$ combina la parte autorregresiva y la de medias móviles:
+
+$$X_t = a_0 + \sum_{i=1}^{p} a_i X_{t-i} + U_t + \sum_{j=1}^{q} \theta_j U_{t-j}$$
+
+Con el operador de rezago (Clase 02): $\Phi(L)\, X_t = a_0 + \Theta(L)\, U_t$, donde $\Phi(L) = 1-a_1 L - \dots - a_p L^p$ y $\Theta(L) = 1+\theta_1 L + \dots + \theta_q L^q$. Es estacionario si las raíces de $\Phi(L)=0$ caen fuera del círculo unitario (la parte MA no afecta la estacionariedad).
+
+Cuando la serie **no** es estacionaria en niveles pero sí lo es después de diferenciarla $d$ veces, hablamos de un proceso $ARIMA(p,d,q)$: un $ARMA(p,q)$ aplicado a $\Delta^d X_t$ en lugar de a $X_t$. El caso $d=1$ (una diferencia) es, por mucho, el más común en series económicas mensuales.
+
+## 2. La metodología de Box-Jenkins
+
+1. **Identificación:** con la FAC y la FACP (Clase 03) proponemos valores candidatos de $p$, $d$, $q$
+2. **Estimación:** ajustamos por máxima verosimilitud los modelos candidatos
+3. **Diagnóstico:** revisamos que los residuales sean ruido blanco (Ljung-Box, FAC de residuales) y comparamos AIC/BIC
+4. **Pronóstico:** con el modelo seleccionado, generamos predicciones fuera de muestra
+
+### Paso 1 — Identificación
+
+```{r datos}
+Datos <- read_excel("../data/Base_Transporte.xlsx", sheet = "Datos", col_names = TRUE)
+Pax_Metro <- ts(Datos$Pax_Metro, start = c(2000, 1), frequency = 12)
+dln_Pax_Metro <- diff(log(Pax_Metro))
+
+par(mfrow = c(1, 2))
+acf(dln_Pax_Metro,  lag.max = 24, main = "FAC — dln(Pax_Metro)")
+pacf(dln_Pax_Metro, lag.max = 24, main = "FACP — dln(Pax_Metro)")
+par(mfrow = c(1, 1))
+```
+
+La FAC y la FACP muestran varios rezagos significativos que no se cortan de forma limpia en ningún punto — un patrón mixto típico de un $ARMA(p,q)$ (más que un AR o MA "puro"). Como punto de partida, probemos algunos modelos pequeños alrededor de $p, q \in \{0,1,2\}$.
+
+### Paso 2 — Estimación de modelos candidatos
+
+```{r grid_modelos}
+ordenes <- expand.grid(p = 0:2, q = 0:2)
+resultados <- lapply(seq_len(nrow(ordenes)), function(i) {
+  p <- ordenes$p[i]; q <- ordenes$q[i]
+  m <- tryCatch(arima(dln_Pax_Metro, order = c(p, 0, q), method = "ML"),
+                error = function(e) NULL)
+  if (is.null(m)) return(data.frame(p = p, q = q, AIC = NA, BIC = NA))
+  data.frame(p = p, q = q, AIC = round(AIC(m), 1), BIC = round(BIC(m), 1))
+})
+
+tabla_modelos <- do.call(rbind, resultados) %>% arrange(AIC)
+tabla_modelos
+```
+
+Elegimos el modelo con menor AIC (con BIC como criterio de desempate, ya que penaliza más la complejidad):
+
+```{r mejor_modelo}
+mejor <- tabla_modelos[1, ]
+mejor
+
+modelo_final <- arima(dln_Pax_Metro, order = c(mejor$p, 0, mejor$q), method = "ML")
+modelo_final
+```
+
+### Paso 3 — Diagnóstico de residuales
+
+Un buen modelo debe dejar residuales que se comporten como ruido blanco: sin autocorrelación significativa.
+
+```{r diagnostico}
+checkresiduals(modelo_final)
+```
+
+```{r ljung_box_residuales}
+Box.test(residuals(modelo_final), lag = 12, type = "Ljung-Box", fitdf = mejor$p + mejor$q)
+```
+
+Si no se rechaza $H_0$ (valor-p > 0.05), los residuales son consistentes con ruido blanco y el modelo es adecuado en términos de ajuste dentro de muestra.
+
+### Comprobación con selección automática
+
+`auto.arima()` implementa una búsqueda automatizada (todavía dentro del enfoque clásico de Box-Jenkins, no aprendizaje automatizado) sobre $p, d, q$ minimizando AIC. Es una buena forma de contrastar la elección manual:
+
+```{r auto_arima}
+modelo_auto <- auto.arima(dln_Pax_Metro, seasonal = FALSE, stepwise = FALSE, approximation = FALSE)
+modelo_auto
+```
+
+---
+
+## 3. Pronóstico fuera de muestra
+
+Pronosticamos 12 meses hacia adelante con el modelo seleccionado manualmente, junto con su intervalo de confianza al 95%:
+
+```{r forecast}
+h <- 12
+pronostico <- forecast(modelo_final, h = h, level = 95)
+autoplot(pronostico) +
+  labs(title = "Pronóstico — dln(Pax_Metro)", x = "Tiempo", y = "Var. log. mensual") +
+  tema_series()
+```
+
+### Regreso a la escala original (niveles)
+
+El pronóstico está en diferencias logarítmicas; para interpretarlo como pasajeros del Metro necesitamos "deshacer" ambas transformaciones: acumular las diferencias pronosticadas y exponenciar, anclando en el último valor observado.
+
+```{r forecast_niveles}
+ultimo_log <- log(Pax_Metro)[length(Pax_Metro)]
+log_pronosticado <- ultimo_log + cumsum(pronostico$mean)
+niveles_pronosticados <- exp(log_pronosticado)
+
+fechas_pronostico <- seq(as.Date("2025-07-01"), by = "month", length.out = h)
+data.frame(Fecha = fechas_pronostico, Pax_Metro_pronosticado = round(niveles_pronosticados, 2))
+```
+
+```{r plot_forecast_niveles}
+serie_hist <- data.frame(Fecha = Datos$Periodo, valor = Datos$Pax_Metro, tipo = "Observado")
+serie_pred <- data.frame(Fecha = fechas_pronostico, valor = as.numeric(niveles_pronosticados), tipo = "Pronóstico")
+
+ggplot(rbind(serie_hist, serie_pred), aes(x = Fecha, y = valor, color = tipo)) +
+  geom_line(linewidth = 0.6) +
+  labs(title = "Pax_Metro — observado y pronóstico a 12 meses",
+       x = "Tiempo", y = "Millones de pasajeros", color = "") +
+  tema_series()
+```
+
+Recuerda: el intervalo de confianza que calculamos arriba corresponde a la escala en diferencias logarítmicas. Al acumular y exponenciar, el intervalo se **ensancha** con el horizonte — la incertidumbre del pronóstico crece cuanto más lejos pronosticamos, algo que no se aprecia si sólo miramos el punto central.
+
+---
+
+## Ejercicios
+
+1. Repite la búsqueda en rejilla de la sección 2, pero sobre `diff(log(Pax_Nal))` en lugar de `Pax_Metro`. ¿El modelo seleccionado por AIC coincide con el que elige `auto.arima()`?
+2. Amplía la rejilla a $p, q \in \{0, 1, 2, 3\}$ para `Pax_Metro`. ¿Cambia el modelo ganador? ¿Qué pasa con el AIC si sigues aumentando $p$ y $q$ indefinidamente?
+3. Con el modelo final de la sección 2, construye el intervalo de confianza al 80% (en vez de 95%) para el pronóstico. ¿Cómo cambia el ancho de la banda?
+4. Guarda 12 observaciones al final de la muestra (no las uses para estimar), ajusta el modelo con el resto, pronostica esos 12 meses y compara contra los valores reales con el error cuadrático medio (RMSE).

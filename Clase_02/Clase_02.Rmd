@@ -1,0 +1,197 @@
+---
+title: "Clase 02. Elementos de Ecuaciones en Diferencia"
+subtitle: "Econometría II — Series de Tiempo | Tec de Monterrey | Sesión 3 (18 ago 2026)"
+author: "Benjamín Oliva (benjov@tec.mx)"
+date: "`r format(Sys.Date(), '%B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                       fig.width = 9, fig.height = 5)
+```
+
+## ¿Qué aprenderemos hoy?
+
+Esta sesión cubre el punto 2 del temario: ecuaciones en diferencia homogéneas de primer orden y órdenes superiores, el operador de rezago, y la representación de procesos divergentes.
+
+Al terminar esta clase deberás poder:
+
+1. Escribir y resolver una ecuación en diferencia de primer orden dado un valor inicial
+2. Usar el operador de rezago para representar de forma compacta una ecuación en diferencia
+3. Resolver una ecuación de segundo orden y relacionar sus raíces características con la dinámica del proceso (convergencia, oscilación, explosión)
+4. Reconocer, algebraica y gráficamente, cuándo un proceso es divergente
+
+```{r libraries}
+library(ggplot2)
+library(dplyr)
+source("../utils/utils.R")
+```
+
+---
+
+## 1. Motivación
+
+Los modelos AR, MA y ARMA que veremos en las próximas dos sesiones son, en el fondo, **ecuaciones en diferencia**: expresan el valor presente de una serie como función de sus propios valores pasados (más un término de innovación). Antes de introducir el componente aleatorio, conviene entender la parte **determinística**: dada una ecuación en diferencia y una condición inicial, ¿qué trayectoria describe $y_t$ a lo largo del tiempo?
+
+## 2. Ecuaciones en diferencia de primer orden
+
+Una ecuación en diferencia lineal de primer orden tiene la forma:
+
+$$y_t = a_0 + a_1 y_{t-1}, \qquad t = 1, 2, \dots$$
+
+con una condición inicial $y_0$ dada. Resolviendo por sustitución hacia atrás (iterando):
+
+$$y_t = a_1^t y_0 + a_0 \sum_{i=0}^{t-1} a_1^i$$
+
+Si $a_1 \neq 1$, la suma geométrica tiene forma cerrada y la **solución general** es:
+
+$$y_t = a_1^t y_0 + a_0 \frac{1 - a_1^t}{1 - a_1}$$
+
+El primer término es la **solución homogénea** (qué pasaría sin el término constante $a_0$); el segundo es la **solución particular** asociada a $a_0$. El comportamiento de largo plazo depende enteramente de $a_1$ (la **raíz característica**):
+
+| Condición sobre $a_1$ | Comportamiento |
+|---|---|
+| $|a_1| < 1$ | Converge a $a_0/(1-a_1)$ |
+| $a_1 = 1$ | No converge: crece linealmente (raíz unitaria) |
+| $|a_1| > 1$ | Diverge (explota) |
+| $a_1 < 0$ | Oscila (converge si $|a_1|<1$, explota si $|a_1|>1$) |
+
+### Simulación: dos procesos de primer orden
+
+```{r simulacion_orden1}
+Diff_Eq <- data.frame(Tiempo = 0:100)
+
+# Proceso 1: a0 = 2, a1 = 0.9, y0 = 10  (raíz positiva < 1 -> convergencia monótona)
+Diff_Eq$Process_1 <- 2 * (1 - 0.9^Diff_Eq$Tiempo) / (1 - 0.9) + (0.9^Diff_Eq$Tiempo) * 10
+
+# Proceso 2: a0 = 2, a1 = -0.5, y0 = 10 (raíz negativa -> oscila y converge)
+Diff_Eq$Process_2 <- 2 * (1 - (-0.5)^Diff_Eq$Tiempo) / (1 + 0.5) + ((-0.5)^Diff_Eq$Tiempo) * 10
+```
+
+```{r plot_orden1_p1}
+ggplot(data = Diff_Eq, aes(x = Tiempo, y = Process_1)) +
+  geom_line(linewidth = 0.5, color = "darkblue") +
+  geom_point(size = 1.0, color = "darkblue") +
+  labs(title = "Proceso de primer orden — a1 = 0.9 (converge monótonamente)",
+       x = "Tiempo", y = expression(y[t])) +
+  tema_series() + theme(legend.position = "none")
+```
+
+```{r plot_orden1_p2}
+ggplot(data = Diff_Eq, aes(x = Tiempo, y = Process_2)) +
+  geom_line(linewidth = 0.5, color = "darkred") +
+  geom_point(size = 1.0, color = "darkred") +
+  labs(title = "Proceso de primer orden — a1 = -0.5 (oscila y converge)",
+       x = "Tiempo", y = expression(y[t])) +
+  tema_series() + theme(legend.position = "none")
+```
+
+Nota que ambos procesos convergen al mismo valor de largo plazo $a_0/(1-a_1)$ ... pero por caminos muy distintos: monótono vs. oscilante. El signo de $a_1$ determina la forma; su módulo, la velocidad.
+
+---
+
+## 3. El operador de rezago
+
+El **operador de rezago** (o de retardo) $L$ se define sobre una serie de tiempo como:
+
+$$L\,y_t = y_{t-1}, \qquad L^k y_t = y_{t-k}$$
+
+Es una notación algebraica: nos permite tratar ecuaciones en diferencia como polinomios en $L$. La ecuación de primer orden $y_t = a_0 + a_1 y_{t-1}$ se reescribe como:
+
+$$y_t - a_1 L y_t = a_0 \quad\Longleftrightarrow\quad (1 - a_1 L)\, y_t = a_0$$
+
+Al polinomio $\Phi(L) = 1 - a_1 L$ se le llama **polinomio característico**. La condición de convergencia $|a_1| < 1$ es equivalente a decir que la **raíz** de $\Phi(L) = 0$ (es decir $L = 1/a_1$) cae **fuera** del círculo unitario ($|1/a_1| > 1$). Esta forma de pensar —raíces del polinomio característico dentro o fuera del círculo unitario— es exactamente la que usaremos para estacionariedad de procesos AR (Clase 03) y para pruebas de raíz unitaria (Clase 05).
+
+En R, el operador de rezago se implementa con `dplyr::lag()` (o `stats::lag()` para objetos `ts`):
+
+```{r operador_rezago_demo}
+y <- Diff_Eq$Process_1
+data.frame(t = Diff_Eq$Tiempo, y_t = y, L_y_t = dplyr::lag(y, 1)) %>% head(6)
+```
+
+---
+
+## 4. Ecuaciones en diferencia de orden superior
+
+Una ecuación de **segundo orden** tiene la forma:
+
+$$y_t = a_0 + a_1 y_{t-1} + a_2 y_{t-2} \quad\Longleftrightarrow\quad (1 - a_1 L - a_2 L^2)\, y_t = a_0$$
+
+El polinomio característico $\Phi(L) = 1 - a_1 L - a_2 L^2$ ahora tiene **dos raíces**, $L_1, L_2$, que pueden ser:
+
+- **Reales y distintas:** la solución homogénea combina dos términos geométricos, $c_1 L_1^{-t} + c_2 L_2^{-t}$
+- **Reales e iguales:** caso degenerado con un término adicional en $t$
+- **Complejas conjugadas:** la solución homogénea es una oscilación amortiguada (o explosiva) — un seno/coseno multiplicado por el módulo elevado a $t$
+
+En todos los casos, el proceso es **convergente si y sólo si el módulo de cada raíz es mayor a 1** (caen fuera del círculo unitario).
+
+### Ejemplo: raíces reales distintas
+
+Tomemos $a_1 = 0.9$, $a_2 = -0.2$, que factoriza como $(1 - 0.4L)(1 - 0.5L)$ — es decir, dos raíces características "internas" de 0.4 y 0.5. La solución (con $a_0=10$ y condiciones iniciales dadas) es:
+
+```{r simulacion_orden2}
+Diff_Eq$Process_3 <- 10 - 450 * (0.4)^Diff_Eq$Tiempo + 440 * (0.5)^Diff_Eq$Tiempo
+```
+
+```{r plot_orden2}
+ggplot(data = Diff_Eq, aes(x = Tiempo, y = Process_3)) +
+  geom_line(linewidth = 0.5, color = "darkgreen") +
+  geom_point(size = 1.0, color = "darkgreen") +
+  labs(title = "Proceso de segundo orden — raíces reales 0.4 y 0.5 (converge)",
+       x = "Tiempo", y = expression(y[t])) +
+  tema_series() + theme(legend.position = "none")
+```
+
+Podemos verificar el resultado hallando las raíces del polinomio característico $1 - 0.9L + 0.2L^2 = 0$ con `plot_char_roots()` (definida en `utils/utils.R`): el proceso es estacionario/convergente si **todas** las raíces caen fuera del círculo unitario.
+
+```{r plot_raices}
+plot_char_roots(c(0.9, -0.2), titulo = "Raíces características del Proceso 3")
+```
+
+Ambas raíces (2.0 y 2.5) están fuera del círculo unitario ⇒ el proceso converge, tal como vimos en la gráfica.
+
+---
+
+## 5. Procesos divergentes
+
+Volvamos al caso de primer orden y comparemos tres valores de $a_1$: uno estacionario ($0.9$), uno con **raíz unitaria** ($1$) y uno **explosivo** ($1.05$):
+
+```{r simulacion_divergente}
+Diff_Eq_Div <- data.frame(Tiempo = 0:40)
+Diff_Eq_Div$Convergente <- 2 * (1 - 0.9^Diff_Eq_Div$Tiempo) / (1 - 0.9) + (0.9^Diff_Eq_Div$Tiempo) * 10
+Diff_Eq_Div$Raiz_Unitaria <- 10 + 2 * Diff_Eq_Div$Tiempo          # a1 = 1: límite de la fórmula general (regla de L'Hôpital)
+Diff_Eq_Div$Explosivo <- 2 * (1 - 1.05^Diff_Eq_Div$Tiempo) / (1 - 1.05) + (1.05^Diff_Eq_Div$Tiempo) * 10
+
+Diff_Eq_Div_long <- Diff_Eq_Div %>%
+  tidyr::pivot_longer(cols = -Tiempo, names_to = "Proceso", values_to = "y")
+
+ggplot(Diff_Eq_Div_long, aes(x = Tiempo, y = y, color = Proceso)) +
+  geom_line(linewidth = 0.7) +
+  labs(title = "Convergente vs. raíz unitaria vs. explosivo",
+       subtitle = "a1 = 0.9, a1 = 1 y a1 = 1.05, respectivamente",
+       x = "Tiempo", y = expression(y[t]), color = "") +
+  tema_series()
+```
+
+Tres observaciones importantes:
+
+1. Cuando $a_1 = 1$ la fórmula general de la sección 2 no está definida (división entre $1-a_1=0$); tomando el límite ($a_1 \to 1$) se obtiene una **tendencia lineal determinística**, $y_t = y_0 + a_0 t$. Esta es la versión determinística de lo que en la Clase 05 llamaremos **raíz unitaria**: el caso frontera entre estacionariedad y explosión.
+2. Cuando $|a_1| > 1$, el proceso **diverge geométricamente** — pequeñas diferencias en el valor inicial se amplifican sin límite.
+3. En términos del operador de rezago: el proceso es convergente si la raíz de $\Phi(L)=0$ cae **fuera** del círculo unitario, tiene raíz unitaria si cae **exactamente sobre** él, y es explosivo si cae **dentro**.
+
+---
+
+## Ejercicios
+
+1. Modifica el Proceso 1 usando `a1 = 1.05` (raíz mayor que 1, sin usar el límite). ¿Qué ocurre con la trayectoria? ¿Qué implicación económica tiene una raíz mayor a 1?
+2. Para el proceso de segundo orden, encuentra analíticamente los valores de $a_1, a_2$ para los que el módulo de las raíces complejas conjugadas es exactamente 1. Verifica con `plot_char_roots()`.
+3. Agrega una tercera trayectoria al primer gráfico con raíces reales de módulo menor a 1 (por ejemplo `a1 = 0.5, a2 = 0.3`). Compara la velocidad de convergencia con los dos procesos originales.
+4. Usando el operador de rezago, escribe la ecuación característica de un proceso de tercer orden $y_t = a_1 y_{t-1} + a_2 y_{t-2} + a_3 y_{t-3}$. ¿Cuántas raíces tiene?

@@ -1,0 +1,260 @@
+---
+title: "Introducción a R"
+subtitle: "Econometría II — Series de Tiempo | Tec de Monterrey | Sesión 1 (11 ago 2026)"
+author: "Benjamín Oliva (benjov@tec.mx)"
+date: "`r format(Sys.Date(), '%B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## ¿Qué aprenderemos hoy?
+
+Esta sesión introduce el lenguaje R desde cero: cómo crear y manipular los tipos de objetos que usaremos a lo largo del curso para almacenar y transformar series de tiempo.
+
+Al terminar esta clase deberás poder:
+
+1. Crear y operar con los tipos básicos de R: vectores, matrices, listas y data frames
+2. Distinguir entre tipos de datos (numérico, caracter, lógico) y convertir entre ellos
+3. Escribir funciones propias y usar librerías de terceros
+4. Importar una base de datos en Excel y hacer una primera exploración/transformación de una serie de tiempo — el mismo tipo de base que usaremos en el resto del curso
+
+---
+
+## Algunas reglas importantes
+
+1. R es case sensitive: **distingue entre minúsculas y mayúsculas**
+2. Un bloque de código ejecutable (*chunk*) se escribe entre:
+
+```{r echo = TRUE, eval = FALSE}
+#```{r}
+#```
+```
+
+3. Para **ejecutar una línea** de código en RStudio se usa "Ctrl + Enter" (Cmd + Enter en Mac)
+4. Para **limpiar la consola** se usa "Ctrl + L"
+5. El símbolo `;` permite ejecutar más de una instrucción en la misma línea
+6. R tiene **palabras reservadas** que no pueden usarse como nombres de objetos: `break`, `for`, `function`, `if`, `in`, `next`, `repeat`, `return`, `while`, `TRUE`, `FALSE`, entre otras
+
+## Objetos
+
+### Clases de objetos básicos
+
+Un hecho fundamental de la programación en R es contar con un buen manejo de los distintos tipos de objetos y sus propiedades:
+
+- **character**: texto
+- **numeric**: números reales
+- **logical**: `TRUE`/`FALSE`, resultado de evaluaciones lógicas
+- **integer**: números enteros
+- **complex**: números complejos
+
+```{r}
+class("R")
+class(56)
+class("R" > "Python")
+class(as.integer(2))
+class(sqrt(5) * as.complex(-1))
+```
+
+### Asignación e impresión de objetos
+
+La información que manejamos en R debe *asignarse a un nombre*; a esto le llamamos asignación de objetos y se hace con el símbolo `<-` o `=`.
+
+```{r}
+ObjetoGuardado <- 5
+# Forma tradicional de imprimir en R
+print(ObjetoGuardado)
+# En RStudio basta con escribir el nombre del objeto en la consola
+ObjetoGuardado
+```
+
+### Funciones como objetos
+
+Un tipo particular de objeto son las funciones: operan sobre otros objetos para producir un resultado.
+
+```{r}
+class(class)
+```
+
+Lo que declaramos dentro de una función son sus *argumentos*: sobre qué objeto debe operar y de qué modo. Si no se es explícito, R usa valores por defecto.
+
+```{r}
+pi
+round(pi, 2)
+args(round)
+```
+
+### Operadores matemáticos
+
+- suma y resta: `+`, `-`
+- multiplicación y división: `*`, `/`
+- potencia y raíz cuadrada: `**` (o `^`), `sqrt()`
+- exponencial y logaritmo: `exp()`, `log()`
+
+```{r}
+ObjetoGuardado <- 1:10
+ObjetoGuardado * 5
+ObjetoGuardado ** (1 / 2)
+log(ObjetoGuardado)
+```
+
+### Operadores lógicos
+
+- Coincidencia exacta (`==`)
+- Mayor o igual / menor o igual (`>=`, `<=`)
+- Es distinto (`!=`)
+- Y / O (`&`, `|`)
+- Existe en (`%in%`)
+
+```{r}
+2 + 2 == 5
+2 + 2 != 5
+2 + 2 >= 5
+
+(2 + 2 == 5) & (2 + 2 <= 5)
+FALSE & TRUE
+FALSE | TRUE
+
+secuencia <- 1:10
+secuencia %in% 3
+```
+
+## Arreglos de datos de una y múltiples clases
+
+- **vector**: sólo admite un tipo de dato; se construye con `c()` (*combine*)
+- **list**: admite múltiples tipos de datos a la vez; se construye con `list()`
+
+```{r}
+secuencia <- c(1, 2, 3, "R") # se convierte todo a character
+class(secuencia)
+fruta <- list("Naranja", 18, TRUE)
+class(fruta)
+```
+
+## Arreglos de datos bidimensionales
+
+Con mayor frecuencia usaremos arreglos bidimensionales (filas y columnas):
+
+- **matrix**: bidimensional, un solo tipo de dato
+- **data.frame**: bidimensional, cada columna puede tener un tipo de dato distinto — es el objeto que más usaremos para cargar bases de datos económicas
+
+```{r}
+vector <- 1:16
+M_object <- matrix(vector, ncol = 4)
+M_object
+diagonal <- diag(4)
+M_object %*% diagonal
+```
+
+```{r}
+data(iris)
+head(iris)
+class(iris)
+class(iris$Sepal.Length)
+class(iris$Species)
+```
+
+## Funciones propias
+
+Un elemento muy poderoso de R es que podemos pasar de usuarios a desarrolladores. El primer paso es escribir nuestras propias funciones.
+
+R sólo trae por defecto la raíz cuadrada (`sqrt`). Esta función calcula raíces de orden `n`, con dos argumentos: el objeto sobre el que opera y el orden de la raíz.
+
+```{r}
+raiz <- function(x, n = 2) {
+  x ** (1 / n)
+}
+```
+
+```{r fig.align = 'center'}
+x <- 1:100
+y <- raiz(x)
+y2 <- raiz(x, 3)
+
+plot(x, y, type = "l", lwd = 5)
+lines(x, y2, col = "blue")
+legend(2, 10, c("raíz cuadrada", "raíz cúbica"), lwd = c(5, 2), col = c("black", "blue"))
+```
+
+## Librerías
+
+Así como podemos escribir funciones propias, la comunidad de R constantemente crea y actualiza *librerías* (paquetes) para evitar que todos dupliquemos el mismo esfuerzo. A lo largo del curso usaremos, entre otras:
+
+- `ggplot2`: gráficos
+- `dplyr`: manipulación de datos
+- `readxl`: importar archivos de Excel
+- `stats`: modelos estadísticos base de R (incluye `arima`, `acf`, `pacf`, etc.)
+- `urca`, `vars`: pruebas de raíz unitaria y modelos multivariados (más adelante en el curso)
+
+```{r fig.align = 'center'}
+library(ggplot2)
+
+df_raices <- data.frame(x = x, cuadrada = y, cubica = y2)
+
+ggplot(df_raices, aes(x = x)) +
+  geom_line(aes(y = cuadrada, col = "Raíz cuadrada")) +
+  geom_line(aes(y = cubica, col = "Raíz cúbica")) +
+  labs(title = "Comparación de raíz cuadrada y raíz cúbica", x = "x", y = "y", col = "")
+```
+
+## Caso práctico: primer contacto con una serie de tiempo
+
+Durante el curso usaremos, sobre todo, dos bases de datos de INEGI que ya están en la carpeta `data/` del repositorio:
+
+- `Base_Transporte.xlsx`: pasajeros y vuelos, nacionales e internacionales, y pasajeros del STC Metro (mensual, ene-2000 a jun-2025)
+- `Data_Practica_02.xlsx`: tasas de informalidad laboral y desocupación (mensual, ene-2005 a jul-2025)
+
+Vamos a importar la primera y a dar los primeros pasos que retomaremos, con más detalle, en la próxima sesión.
+
+```{r}
+library(readxl)
+library(dplyr)
+
+Datos <- read_excel("../data/Base_Transporte.xlsx", sheet = "Datos", col_names = TRUE)
+str(Datos)
+head(Datos)
+```
+
+### Primera transformación: niveles, logaritmos y diferencias
+
+Dos transformaciones que usaremos constantemente en el curso son el logaritmo (para estabilizar la varianza) y la diferencia (para eliminar tendencia). Con `Pax_Nal` (pasajeros en vuelos nacionales):
+
+```{r}
+Datos <- Datos %>%
+  mutate(
+    ln_Pax_Nal   = log(Pax_Nal),
+    dln_Pax_Nal  = ln_Pax_Nal - lag(ln_Pax_Nal)
+  )
+
+head(Datos)
+```
+
+### Primera gráfica
+
+```{r fig.align = 'center'}
+ggplot(Datos, aes(x = Periodo, y = Pax_Nal)) +
+  geom_line(color = "steelblue") +
+  labs(title = "Pasajeros en vuelos nacionales", subtitle = "México, mensual",
+       x = "Periodo", y = "Pasajeros") +
+  theme_minimal()
+```
+
+Nota la caída abrupta alrededor de 2020: la volveremos a ver cuando hablemos de estacionariedad (Clase 01) y de volatilidad (Clases 07-08).
+
+---
+
+## Ejercicios
+
+1. Crea un vector con las tasas de inflación mensual de México en 2024 (búscalas en el sitio de Banxico). Calcula su media, desviación estándar y rango.
+2. Construye una matriz 4×3 que almacene los valores de IGAE, IPC y Tipo de Cambio para cuatro trimestres. Nombra filas y columnas con `rownames()`/`colnames()`.
+3. Dado el data frame `df <- data.frame(anio = 2020:2023, pib = c(18.8, 17.1, 18.4, 19.2))`, extrae sólo los años con PIB mayor a 18 y agrega una columna con la variación porcentual anual.
+4. Usando `Data_Practica_02.xlsx` (columna `TDesocupa`), repite la transformación a logaritmos y diferencias que hicimos arriba con `Pax_Nal`, y grafica el resultado.

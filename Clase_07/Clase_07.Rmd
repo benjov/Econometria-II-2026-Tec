@@ -1,0 +1,153 @@
+---
+title: "Clase 07. Modelos Univariados de Volatilidad I — Procesos ARCH"
+subtitle: "Econometría II — Series de Tiempo | Tec de Monterrey | Sesión 8 (8 sep 2026)"
+author: "Benjamín Oliva (benjov@tec.mx)"
+date: "`r format(Sys.Date(), '%B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                       fig.width = 9, fig.height = 5)
+```
+
+## ¿Qué aprenderemos hoy?
+
+Esta sesión abre el punto 5 del temario: modelos univariados de volatilidad, empezando por el modelo ARCH (Engle, 1982). Hasta ahora (Clases 03-04) modelamos la **media condicional** de una serie; hoy modelamos su **varianza condicional**.
+
+Al terminar esta clase deberás poder:
+
+1. Explicar qué es heterocedasticidad condicional y por qué la varianza (no sólo la media) puede depender del pasado
+2. Detectar "efectos ARCH" con la prueba del multiplicador de Lagrange de Engle
+3. Escribir la representación de un proceso $ARCH(q)$ y estimarlo con `rugarch`
+4. Interpretar los parámetros estimados: varianza incondicional, persistencia
+
+**Datos:** `Data_Practica_02.xlsx` — tasa de desocupación (`TDesocupa`), la misma serie de la Clase 05, donde ya identificamos un cambio estructural asociado al COVID-19
+
+```{r libraries}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(FinTS)
+library(rugarch)
+source("../utils/utils.R")
+```
+
+---
+
+## 1. Motivación: cuando la varianza también tiene memoria
+
+En los modelos ARMA/ARIMA (Clase 04) supusimos que el término de innovación $U_t$ tenía **varianza constante** ($\sigma_u^2$) — homocedasticidad. Muchas series económicas y, sobre todo, financieras violan este supuesto: hay periodos de calma (baja varianza) y periodos turbulentos (alta varianza) que **se agrupan en el tiempo** — lo que se conoce como *volatility clustering*.
+
+```{r datos}
+Datos <- read_excel("../data/Data_Practica_02.xlsx", sheet = "Datos", col_names = TRUE)
+TDesocupa <- ts(Datos$TDesocupa, start = c(2005, 1), frequency = 12)
+dTD <- diff(TDesocupa)  # primera diferencia: cambio mensual en puntos porcentuales
+
+plot(dTD, col = "darkred", main = "Cambio mensual en la tasa de desocupación",
+     ylab = "Puntos porcentuales")
+abline(h = 0, lty = "dashed", col = "grey40")
+```
+
+Observa el choque de 2020: no es sólo que el nivel de la serie cambie (eso ya lo vimos en la Clase 05, con el quiebre estructural detectado en `TDesocupa`), sino que **la magnitud de las variaciones mes a mes se dispara** alrededor de ese periodo, y tarda varios meses en volver a la calma de antes. Esa dinámica de la varianza es justo lo que un modelo ARCH/GARCH busca capturar — algo que un ARMA, enfocado sólo en la media, no puede hacer.
+
+```{r vol_clustering}
+plot(dTD^2, col = "darkblue", main = "Proxy de volatilidad: cambio mensual al cuadrado",
+     ylab = expression((Delta * TDesocupa[t])^2))
+```
+
+## 2. Detección de efectos ARCH
+
+Antes de estimar un modelo de volatilidad, conviene **probar formalmente** si hay heterocedasticidad condicional. La prueba del multiplicador de Lagrange de Engle (*ARCH-LM test*) regresa los residuales al cuadrado de un modelo de la media sobre sus propios rezagos:
+
+$$\hat{u}_t^2 = \gamma_0 + \gamma_1 \hat{u}_{t-1}^2 + \dots + \gamma_m \hat{u}_{t-m}^2 + e_t$$
+
+con $H_0: \gamma_1 = \dots = \gamma_m = 0$ (no hay efectos ARCH). Si el modelo de la media es simplemente una constante (como aquí, tras diferenciar), basta con centrar la serie:
+
+```{r arch_lm_test}
+residuales_media <- dTD - mean(dTD)
+
+ArchTest(residuales_media, lags = 3)
+```
+
+Con un valor-p prácticamente cero, se **rechaza** $H_0$: hay evidencia clara de efectos ARCH en `dTD`. Vale la pena comparar contra rezagos más largos:
+
+```{r arch_lm_varios_lags}
+sapply(c(1, 2, 3, 6, 12), function(m) round(ArchTest(residuales_media, lags = m)$p.value, 4))
+```
+
+El efecto es más fuerte en rezagos cortos (1 a 3 meses) — consistente con lo que vimos en la gráfica: la volatilidad alta se concentra en una ventana de pocos meses alrededor del choque de 2020.
+
+## 3. El proceso ARCH(q)
+
+Engle (1982) propone modelar la varianza condicional como función de los choques pasados al cuadrado. Formalmente:
+
+$$U_t = \sigma_t z_t, \qquad z_t \sim \text{i.i.d.}(0,1)$$
+$$\sigma_t^2 = \omega + \alpha_1 U_{t-1}^2 + \dots + \alpha_q U_{t-q}^2$$
+
+con $\omega > 0$ y $\alpha_i \geq 0$ (para garantizar $\sigma_t^2 > 0$). La idea central: un choque grande en $t-1$ (positivo o negativo, por eso se eleva al cuadrado) **eleva la varianza esperada** en $t$ — de ahí el agrupamiento de volatilidad. Si $\alpha_i = 0$ para todo $i$, colapsa al caso homocedástico $\sigma_t^2 = \omega$.
+
+La varianza **incondicional** (de largo plazo) de un ARCH(1) es $\sigma^2 = \omega / (1 - \alpha_1)$, que requiere $\alpha_1 < 1$ para estar bien definida (condición de estacionariedad en varianza, el análogo de $|a_1|<1$ para la media en la Clase 03).
+
+### Estimación de un ARCH(1)
+
+```{r arch1}
+spec_arch1 <- ugarchspec(
+  variance.model = list(model = "sGARCH", garchOrder = c(1, 0)),
+  mean.model     = list(armaOrder = c(0, 0), include.mean = TRUE)
+)
+
+fit_arch1 <- ugarchfit(spec_arch1, dTD)
+fit_arch1
+```
+
+```{r arch1_persistencia}
+omega  <- unname(coef(fit_arch1)["omega"])
+alpha1 <- unname(coef(fit_arch1)["alpha1"])
+
+var_incondicional <- omega / (1 - alpha1)
+c(omega = omega, alpha1 = alpha1, varianza_incondicional = var_incondicional)
+```
+
+El coeficiente $\alpha_1$ es grande (cercano a 0.8) y estadísticamente significativo: los choques recientes tienen un efecto fuerte —pero de corta duración— sobre la varianza condicional.
+
+### Diagnóstico: ¿desaparecieron los efectos ARCH?
+
+```{r diagnostico_arch1}
+residuales_estandarizados <- residuals(fit_arch1, standardize = TRUE)
+ArchTest(residuales_estandarizados, lags = 3)
+```
+
+Si el valor-p ahora es alto (no se rechaza $H_0$), el modelo ARCH(1) capturó adecuadamente la dinámica de la varianza — los residuales estandarizados ya no muestran heterocedasticidad condicional remanente.
+
+### Volatilidad condicional estimada
+
+```{r sigma_t}
+sigma_t <- sigma(fit_arch1)
+
+Fechas <- as.Date(paste0(Datos$Periodos, "/01"), format = "%Y/%m/%d")
+
+data.frame(Periodo = Fechas[-1], sigma = as.numeric(sigma_t)) %>%
+  ggplot(aes(x = Periodo, y = sigma)) +
+  geom_line(color = "firebrick") +
+  labs(title = "Volatilidad condicional estimada — ARCH(1)",
+       subtitle = "Desviación estándar condicional del cambio mensual en TDesocupa",
+       x = "Tiempo", y = expression(sigma[t])) +
+  tema_series()
+```
+
+---
+
+## Ejercicios
+
+1. Repite la prueba ARCH-LM (sección 2) para `diff(Informalidad)`. ¿También hay evidencia de efectos ARCH? Compara la magnitud del valor-p con la de `TDesocupa`.
+2. Estima un ARCH(2) (`garchOrder = c(2, 0)`) sobre `dTD`. ¿Es $\alpha_2$ estadísticamente significativo? Compara el AIC/BIC (`infocriteria(fit)`) contra el ARCH(1) de la sección 3.
+3. Calcula la varianza incondicional implícita por tu ARCH(2) del ejercicio anterior y compárala con la varianza muestral de `dTD` (`var(dTD)`). ¿Qué tan cerca están?
+4. ¿Por qué crees que series *mensuales* macroeconómicas como ésta muestran efectos ARCH menos "sostenidos" en el tiempo que los rendimientos *diarios* de un activo financiero? (Piensa en la frecuencia de los choques que generan volatilidad en cada caso.)

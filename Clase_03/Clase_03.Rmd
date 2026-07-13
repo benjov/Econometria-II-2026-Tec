@@ -1,0 +1,200 @@
+---
+title: "Clase 03. Procesos Estacionarios Univariados I — AR(p), MA(q), FAC y FACP"
+subtitle: "Econometría II — Series de Tiempo | Tec de Monterrey | Sesión 4 (19 ago 2026)"
+author: "Benjamín Oliva (benjov@tec.mx)"
+date: "`r format(Sys.Date(), '%B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                       fig.width = 9, fig.height = 5)
+```
+
+## ¿Qué aprenderemos hoy?
+
+Esta sesión cubre los incisos (a), (b) y (d) del punto 3 del temario: procesos autorregresivos AR(p), procesos de medias móviles MA(q), y las funciones de autocorrelación (FAC) y autocorrelación parcial (FACP). La combinación ARMA/ARIMA y el pronóstico se ven en la Clase 04.
+
+Al terminar esta clase deberás poder:
+
+1. Enunciar la definición de estacionariedad débil (de segundo orden)
+2. Simular procesos AR(1) y MA(1), y derivar su FAC teórica
+3. Calcular la FAC y FACP muestrales de una serie real e identificar visualmente si su patrón sugiere un proceso AR, MA o ninguno de los dos
+4. Usar la prueba Ljung-Box (estadística Q) para detectar autocorrelación residual
+
+**Datos:** `Base_Transporte.xlsx` (mismo dataset de las Clases 01 e Intro a R)
+
+```{r libraries}
+library(ggplot2)
+library(dplyr)
+library(readxl)
+source("../utils/utils.R")
+```
+
+---
+
+## 1. Estacionariedad débil
+
+Un proceso $\{X_t\}$ es **débilmente estacionario** (o estacionario en covarianza) si:
+
+1. $E[X_t] = \mu$ es constante para todo $t$
+2. $\text{Var}(X_t) = \sigma^2$ es constante y finita para todo $t$
+3. $\text{Cov}(X_t, X_{t-k}) = \gamma_k$ depende **sólo** del rezago $k$, no de $t$
+
+Esto es justamente la versión estocástica de lo que vimos de forma determinística en la Clase 02: un proceso AR es estacionario si las raíces de su polinomio característico caen fuera del círculo unitario. Hoy verificamos esa condición de forma empírica, a través de la FAC y la FACP.
+
+## 2. Procesos Autorregresivos AR(p)
+
+Un proceso $AR(p)$ se define como:
+
+$$X_t = a_0 + a_1 X_{t-1} + a_2 X_{t-2} + \dots + a_p X_{t-p} + U_t, \qquad U_t \sim \text{i.i.d.}(0, \sigma_u^2)$$
+
+Es la versión estocástica de la ecuación en diferencia de orden $p$ que estudiamos en la Clase 02, con un término de innovación $U_t$ agregado en cada periodo. Es estacionario si y sólo si todas las raíces de $\Phi(L) = 1 - a_1 L - \dots - a_p L^p$ caen fuera del círculo unitario.
+
+### Simulación de un AR(1)
+
+```{r simula_ar1}
+a0 <- 5; a1 <- 0.7; X_0 <- a0 / (1 - a1); Tt <- 300
+
+set.seed(12345)
+U_t <- rnorm(Tt + 1, mean = 0, sd = 4)
+
+X_t <- numeric(Tt + 1)
+X_t[1] <- X_0
+for (i in 2:(Tt + 1)) {
+  X_t[i] <- a0 + a1 * X_t[i - 1] + U_t[i - 1]
+}
+
+AR1_sim <- data.frame(Tiempo = 0:Tt, X_t = X_t)
+
+ggplot(AR1_sim, aes(x = Tiempo, y = X_t)) +
+  geom_line(color = "darkblue") +
+  geom_hline(yintercept = X_0, linetype = "dashed", color = "grey40") +
+  labs(title = "Simulación de un proceso AR(1)", subtitle = "a0 = 5, a1 = 0.7",
+       x = "Tiempo", y = expression(X[t])) +
+  tema_series()
+```
+
+### FAC teórica vs. FAC muestral
+
+Para un AR(1) estacionario, se puede demostrar que la autocorrelación teórica al rezago $k$ es simplemente:
+
+$$\rho_k = a_1^{k}$$
+
+es decir, **decae geométricamente** (sin cortarse en ningún rezago). Comparemos esta fórmula con la FAC muestral de nuestra simulación:
+
+```{r fac_teorica_vs_muestral}
+K <- 20
+rho_teorica <- a1 ^ (0:K)
+rho_muestral <- as.numeric(acf(X_t, lag.max = K, plot = FALSE)$acf)
+
+data.frame(rezago = 0:K, teorica = round(rho_teorica, 3), muestral = round(rho_muestral, 3))
+```
+
+```{r plot_acf_ar1}
+acf(X_t, lag.max = K, main = "FAC muestral del AR(1) simulado")
+```
+
+La FAC muestral debería parecerse bastante a la teórica si el tamaño de muestra es suficientemente grande — este es exactamente el tipo de comparación que hicimos, de forma determinística, en la Clase 02.
+
+## 3. Procesos de Medias Móviles MA(q)
+
+Un proceso $MA(q)$ se define como:
+
+$$X_t = \mu + U_t + \theta_1 U_{t-1} + \dots + \theta_q U_{t-q}, \qquad U_t \sim \text{i.i.d.}(0, \sigma_u^2)$$
+
+A diferencia del AR, un MA(q) es **siempre estacionario** (es una combinación lineal finita de innovaciones), sin importar el valor de los $\theta_i$. Su FAC teórica tiene una propiedad muy característica: **se corta abruptamente después del rezago $q$** ($\rho_k = 0$ para $k > q$).
+
+### Simulación de un MA(1)
+
+```{r simula_ma1}
+theta1 <- 0.8
+set.seed(54321)
+U_t2 <- rnorm(Tt + 1, mean = 0, sd = 4)
+MA1_sim <- U_t2[-1] + theta1 * U_t2[-(Tt + 1)]
+
+acf(MA1_sim, lag.max = K, main = "FAC muestral del MA(1) simulado (theta1 = 0.8)")
+```
+
+Observa que la autocorrelación es significativa sólo en el rezago 1, y prácticamente nula después — la firma característica de un MA(1).
+
+## 4. FAC y FACP: guía de identificación
+
+La **función de autocorrelación parcial (FACP)** al rezago $k$ mide la correlación entre $X_t$ y $X_{t-k}$ **después de remover** el efecto lineal de los rezagos intermedios ($X_{t-1}, \dots, X_{t-k+1}$). Es el complemento natural de la FAC para distinguir procesos AR de procesos MA:
+
+| Proceso | FAC | FACP |
+|---|---|---|
+| $AR(p)$ | Decae gradualmente (geométrica u oscilante) | Se corta después del rezago $p$ |
+| $MA(q)$ | Se corta después del rezago $q$ | Decae gradualmente |
+| $ARMA(p,q)$ | Decae gradualmente | Decae gradualmente |
+
+Esta tabla es la base de la **metodología de Box-Jenkins** que formalizaremos en la Clase 04 para elegir el orden $(p, d, q)$ de un modelo ARIMA.
+
+```{r acf_pacf_ar1}
+par(mfrow = c(1, 2))
+acf(X_t,  lag.max = K, main = "FAC — AR(1) simulado")
+pacf(X_t, lag.max = K, main = "FACP — AR(1) simulado")
+par(mfrow = c(1, 1))
+```
+
+Nota cómo la FACP del AR(1) se corta después del rezago 1 (como predice la teoría, $p=1$), mientras que la FAC decae geométricamente.
+
+---
+
+## 5. Aplicación a datos reales
+
+Retomamos `Base_Transporte.xlsx` y la serie de pasajeros del Metro de la CDMX que vimos en clases anteriores.
+
+```{r datos_reales}
+Datos <- read_excel("../data/Base_Transporte.xlsx", sheet = "Datos", col_names = TRUE)
+Pax_Metro <- ts(Datos$Pax_Metro, start = c(2000, 1), frequency = 12)
+
+plot(Pax_Metro, col = "darkblue", type = "l", lwd = 2,
+     xlab = "Tiempo", ylab = "Millones de pasajeros",
+     main = "Pasajeros transportados en el Metro de la CDMX")
+```
+
+```{r acf_pacf_real}
+par(mfrow = c(1, 2))
+acf(Pax_Metro,  lag.max = 48, main = "FAC — Pax_Metro (niveles)")
+pacf(Pax_Metro, lag.max = 48, main = "FACP — Pax_Metro (niveles)")
+par(mfrow = c(1, 1))
+```
+
+La FAC decae muy lentamente y se mantiene alta incluso a rezagos largos — un indicio clásico de **no estacionariedad** (lo formalizaremos con pruebas de raíz unitaria en la Clase 05). Comparemos contra la serie en diferencias logarítmicas:
+
+```{r acf_pacf_diff}
+dln_Pax_Metro <- diff(log(Pax_Metro))
+
+par(mfrow = c(1, 2))
+acf(dln_Pax_Metro,  lag.max = 48, main = "FAC — dln(Pax_Metro)")
+pacf(dln_Pax_Metro, lag.max = 48, main = "FACP — dln(Pax_Metro)")
+par(mfrow = c(1, 1))
+```
+
+### La estadística Q de Ljung-Box
+
+Formaliza la pregunta "¿hay autocorrelación significativa, en conjunto, hasta el rezago $m$?" con hipótesis nula $H_0: \rho_1 = \rho_2 = \dots = \rho_m = 0$.
+
+```{r ljung_box}
+Box.test(Pax_Metro,      lag = 12, type = "Ljung-Box")
+Box.test(dln_Pax_Metro,  lag = 12, type = "Ljung-Box")
+```
+
+En ambos casos se rechaza $H_0$ (valor-p prácticamente cero): incluso en diferencias, la serie conserva autocorrelación — es candidata a modelarse con un AR, MA o ARMA, tema de la próxima clase.
+
+---
+
+## Ejercicios
+
+1. Simula un AR(1) con `a1 = -0.6` (raíz negativa). ¿Cómo cambia la forma de la FAC teórica respecto al caso `a1 = 0.7`? Compruébalo con `acf()`.
+2. Simula un MA(2) con `theta1 = 0.5, theta2 = -0.3` (puedes adaptar el código de la sección 3, sumando un tercer término rezagado). ¿En qué rezago se corta la FAC?
+3. Calcula la FAC y FACP de `Pax_Int` (pasajeros internacionales) en niveles y en diferencias logarítmicas hasta el rezago 36. ¿El patrón estacional (rezago 12, 24...) es visible en la FAC?
+4. Aplica `Box.test()` con `type = "Ljung-Box"` a los residuales de `lm(dln_Pax_Metro ~ 1)` (es decir, la serie centrada en su media) para 6, 12 y 24 rezagos. ¿La conclusión cambia con el número de rezagos usados?

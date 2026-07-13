@@ -1,0 +1,16 @@
+# Claude Code
+.claude/
+.claude/**
+CLAUDE.md
+
+# R
+.Rhistory
+.Rapp.history
+.RData
+.Rproj.user/
+*.Rproj.user
+check.R
+Rplots.pdf
+
+# macOS
+.DS_Store
