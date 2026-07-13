@@ -57,10 +57,12 @@ Funciones auxiliares que varias clases cargan con `source("../utils/utils.R")`:
 | Semana | Martes | Miércoles |
 |---|---|---|
 | 1 (11-12 ago) | Intro a R | Clase 01 |
-| 2 (18-19 ago) | Clase 02 | Clase 03 |
+| 2 (18-19 ago) | Clase 02 | Clase 03 · **Práctica 1** (AR(1)) |
 | 3 (25-26 ago) | Clase 04 | **Examen parcial** (temas 1-3) |
-| 4 (1-2 sep) | Clase 05 | Clase 06 |
+| 4 (1-2 sep) | Clase 05 · **Práctica 2** (raíz unitaria) | Clase 06 |
 | 5 (8-9 sep) | Clase 07 | Clase 08 |
+
+**Prácticas:** `Practica_01` (fecha en el Rmd: 19-ago) evalúa lo visto en Clase 03; `Practica_02` (fecha en el Rmd: 1-sep) evalúa lo visto en Clase 05. Cada una vale 15% de la calificación.
 
 **Trabajo final** (41% de la calificación, ensayo aplicando alguna técnica del curso): se entrega el fin de semana del 12-13 de septiembre.
 
