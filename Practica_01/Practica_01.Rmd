@@ -80,6 +80,8 @@ Recuerda que esta práctica está basada en lo visto en las clases de Introducci
 ```{r}
 # Coloca tu código de la serie seleccionada y modelada como AR(1)
 
+# Para ello usa la función arima (usa ?arima en la consola para ver ejemplos de cómo se usa la función)
+# Por ejemplo, si usas la serie X, una AR(1) sería: arima(X, order = c(1,0,0))
 ```
 
 # Conclusiones
